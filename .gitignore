@@ -33,3 +33,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
