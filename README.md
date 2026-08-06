@@ -53,29 +53,40 @@ One action per active slot, encoded as:
 
 ```
 pokemon_rl/
-├── embedding.py          # Singles battle embedding (825-dim)
-├── env.py                # Singles Gymnasium environment
-├── train.py              # Singles PPO training
-│
 ├── vgc/
 │   ├── constants.py      # Shared constants
 │   ├── embedding.py      # Doubles battle embedding (925-dim)
 │   ├── env.py            # VGC Gymnasium environment + force-switch fix
 │   ├── team.py           # Sample teams (Champions Reg M-B, VGC Reg G)
 │   ├── train.py          # VGC PPO training with optional BC warm-start
-│   └── evaluate.py       # Win-rate evaluation script
+│   └── evaluate.py       # Win-rate evaluation script (CLI)
+│
+├── api/                  # FastAPI backend (DDD)
+│   ├── domain/           # Entities: Checkpoint, Evaluation, BattleResult
+│   ├── application/      # Use cases: queries + RunEvaluation command
+│   ├── infrastructure/   # Repositories: disk checkpoints, results JSON
+│   ├── presentation/     # Routers: /api/training, /api/evaluation
+│   └── main.py           # FastAPI entry point
 │
 └── imitation/
     ├── downloader.py     # Download replays from PS API
     ├── parser.py         # Parse replay logs → (obs, action) pairs
     ├── dataset.py        # PyTorch Dataset wrapper
     └── train_bc.py       # Behavioral cloning pre-training
+
+dashboard/                # Vue 3 training dashboard (DDD)
+├── src/
+│   ├── domain/           # TypeScript interfaces: Checkpoint, Evaluation
+│   ├── application/      # Pinia stores: trainingStore, evaluationStore
+│   ├── infrastructure/   # Axios API adapters
+│   └── presentation/     # Views + components (chart, table, launcher)
+└── package.json
 ```
 
 ## Requirements
 
 - Python 3.11+
-- Node.js v20+ (for the local PS server)
+- Node.js v20+ (for the local PS server and dashboard)
 - A local [Pokémon Showdown](https://github.com/smogon/pokemon-showdown) server running on `localhost:8000`
 
 ## Setup
@@ -87,6 +98,7 @@ cd vgc-rl-agent
 python -m venv pokemon_rl/.venv
 source pokemon_rl/.venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-api.txt
 ```
 
 Start the local PS server (in a separate terminal):
@@ -94,6 +106,59 @@ Start the local PS server (in a separate terminal):
 cd /path/to/pokemon-showdown
 node pokemon-showdown start --no-security --port 8000
 ```
+
+## Dashboard
+
+The dashboard lets you visualize training history, compare win rates across opponents, browse per-battle results, and trigger new evaluations — all from a browser.
+
+### 1 — Start the FastAPI backend
+
+The backend serves training checkpoints and evaluation results, and can run new evaluations on demand.
+
+```bash
+# From the project root, with the virtual environment active
+source pokemon_rl/.venv/bin/activate
+uvicorn pokemon_rl.api.main:app --port 8080 --reload
+```
+
+The API will be available at `http://localhost:8080`. Interactive docs at `http://localhost:8080/docs`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/training/checkpoints` | List all saved model checkpoints |
+| `GET /api/evaluation/results` | List all evaluation runs |
+| `GET /api/evaluation/results/{id}` | Get a specific evaluation with per-battle detail |
+| `POST /api/evaluation/run` | Run a new evaluation against random or heuristic |
+
+### 2 — Start the Vue 3 dashboard
+
+```bash
+cd dashboard
+npm install      # only needed the first time
+npm run dev
+```
+
+Open **http://localhost:5173** in your browser.
+
+![Dashboard overview](https://i.imgur.com/placeholder.png)
+
+#### What you can see
+
+| Panel | Description |
+|-------|-------------|
+| **Stat cards** | Best win rate, latest vs random, latest vs heuristic, total evaluations |
+| **Win rate chart** | Historical win rate over time — blue line = vs random, orange = vs heuristic |
+| **Checkpoints** | All saved `.zip` checkpoints with step count and timestamp |
+| **Evaluations** | Sortable list of all evaluation runs with win rate indicator |
+| **Battle table** | Per-battle breakdown (result, reward, fainted counts) for the selected evaluation |
+| **New evaluation** | Form to launch an evaluation directly from the browser |
+
+### 3 — Run a new evaluation from the dashboard
+
+1. Select a model from the **Modelo** dropdown (defaults to `final`)
+2. Choose opponent: **Random** or **Heurístico**
+3. Set the number of battles
+4. Click **Iniciar evaluación** — results appear automatically in the chart and table once complete
 
 ## Training pipeline
 
