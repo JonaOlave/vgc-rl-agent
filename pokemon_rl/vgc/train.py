@@ -22,7 +22,11 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import get_schedule_fn
 
 from .env import make_vgc_env
-from .team import SAMPLE_TEAM_CHAMPIONS_REGMB, SAMPLE_TEAM_REG_H
+from .team import (
+    OPPONENT_TEAM_POOL_CHAMPIONS_REGMB,
+    SAMPLE_TEAM_CHAMPIONS_REGMB,
+    SAMPLE_TEAM_REG_H,
+)
 
 
 def train(
@@ -33,9 +37,12 @@ def train(
     save_path: str = "models/vgc/",
     log_path: str = "logs/vgc/",
     bc_model_path: Optional[str] = None,
+    vary_opponent_team: bool = False,
 ):
     print(f"Formato: {battle_format}")
     print(f"Oponente: {opponent}")
+    if vary_opponent_team:
+        print(f"Pool de equipos rivales: {len(OPPONENT_TEAM_POOL_CHAMPIONS_REGMB)} equipos (variación activada)")
     print("Creando entorno VGC doubles...")
 
     env = make_vgc_env(
@@ -45,6 +52,7 @@ def train(
         team=team,
         opponent=opponent,
         strict=False,
+        opponent_team_pool=OPPONENT_TEAM_POOL_CHAMPIONS_REGMB if vary_opponent_team else None,
     )
 
     os.makedirs(save_path, exist_ok=True)
@@ -110,7 +118,7 @@ def parse_args():
     p.add_argument("--format", default="gen9randomdoublesbattle",
                    help="Formato PS  (gen9randomdoublesbattle | gen9vgc2025regg | gen9championsvgc2026regmb)")
     p.add_argument("--opponent", default="random",
-                   choices=["random", "heuristic"],
+                   choices=["random", "heuristic", "support_heuristic"],
                    help="Tipo de oponente durante el entrenamiento")
     p.add_argument("--vgc-team", action="store_true",
                    help="Usar equipo VGC 2025 Reg G (gen9vgc2025regg)")
@@ -119,6 +127,10 @@ def parse_args():
     p.add_argument("--timesteps", type=int, default=500_000)
     p.add_argument("--bc-model", default=None,
                    help="Ruta al modelo BC pre-entrenado .zip (sin extensión)")
+    p.add_argument("--vary-opponent-team", action="store_true",
+                   help="El oponente elige un equipo al azar por batalla "
+                        "(pool en team.OPPONENT_TEAM_POOL_CHAMPIONS_REGMB) en vez "
+                        "de ser siempre un mirror match del equipo propio")
     return p.parse_args()
 
 
@@ -136,4 +148,5 @@ if __name__ == "__main__":
         opponent=args.opponent,
         total_timesteps=args.timesteps,
         bc_model_path=args.bc_model,
+        vary_opponent_team=args.vary_opponent_team,
     )

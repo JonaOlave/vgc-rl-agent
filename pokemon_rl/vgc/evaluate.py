@@ -30,9 +30,17 @@ def evaluate(
     opponent: str = "random",
     n_battles: int = 50,
     deterministic: bool = True,
+    opponent_team_pool: Optional[list[str]] = None,
 ) -> dict:
     """
     Carga el modelo entrenado y lo enfrenta contra un oponente N veces.
+
+    opponent_team_pool : list of str, optional
+        Si se pasa, el rival elige equipo al azar de este pool en cada batalla
+        (ver make_vgc_env/RandomTeamPool) en vez de usar `team`. Pasar una
+        lista de un solo elemento fija el equipo rival a un matchup específico
+        (ej. `[SAMPLE_TEAM_TRICKROOM]`) mientras `team` sigue fijando el
+        nuestro — así se arma la tabla de matchups (mirror + arquetipos).
 
     Retorna un dict con: win_rate, wins, losses, draws, mean_reward,
     mean_our_fainted, mean_opp_fainted.
@@ -47,6 +55,7 @@ def evaluate(
         team=team,
         opponent=opponent,
         strict=False,
+        opponent_team_pool=opponent_team_pool,
     )
 
     model = PPO.load(model_path, env=env)
@@ -137,7 +146,7 @@ def parse_args():
     p.add_argument("--vgc-team", action="store_true",
                    help="Usar equipo VGC 2025 Reg G")
     p.add_argument("--opponent", default="random",
-                   choices=["random", "heuristic"],
+                   choices=["random", "heuristic", "support_heuristic"],
                    help="Tipo de oponente")
     p.add_argument("--n-battles", type=int, default=50,
                    help="Número de batallas de evaluación")

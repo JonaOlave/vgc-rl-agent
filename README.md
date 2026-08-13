@@ -4,14 +4,21 @@ Reinforcement learning agent for Pokémon VGC doubles battles using PPO + behavi
 
 ## Results
 
-Evaluated on **50 battles** against a random opponent in the `[Gen 9 Champions] VGC 2026 Reg M-B` format after 100K training steps:
+The agent has gone through 6 rounds of 500K-step PPO fine-tuning (each warm-started from the previous round's
+checkpoint) against `SimpleHeuristicsPlayer`, with a growing pool of opponent team archetypes. Win rate is
+**noisy round-over-round rather than monotonically improving** — see `CLAUDE.md` for the full round-by-round
+history and diagnostics.
 
-| Metric | Value |
-|--------|-------|
-| Win rate | **78%** |
-| Average fainted (ours) | 1.82 / 6 |
-| Average fainted (opponent) | 3.54 / 6 |
-| Mean reward | +1.54 |
+Round 6 results, 50 deterministic-policy battles per matchup in `[Gen 9 Champions] VGC 2026 Reg M-B`:
+
+| Matchup | Win rate |
+|---------|----------|
+| Champions (mirror) | 66.0% |
+| Trick Room | 72.0% |
+| Tailwind | 40.0% |
+| Rain | 36.0% |
+| Sand | 20.0% |
+| Sun | 42.0% |
 
 ## Architecture
 
@@ -56,8 +63,11 @@ pokemon_rl/
 ├── vgc/
 │   ├── constants.py      # Shared constants
 │   ├── embedding.py      # Doubles battle embedding (925-dim)
-│   ├── env.py            # VGC Gymnasium environment + force-switch fix
-│   ├── team.py           # Sample teams (Champions Reg M-B, VGC Reg G)
+│   ├── env.py            # VGC Gymnasium environment + action-decoding fixes
+│   ├── team.py           # Sample teams (Champions Reg M-B, VGC Reg G) + opponent-pool archetypes
+│   ├── teambuilder.py    # RandomTeamPool — opponent picks a random team per battle
+│   ├── opponents.py      # SupportAwareHeuristicsPlayer — opponent that actually uses status/field moves
+│   ├── damage_calc.py    # Damage estimator (wraps poke-env's Gen9 calc) for matchup diagnostics
 │   ├── train.py          # VGC PPO training with optional BC warm-start
 │   └── evaluate.py       # Win-rate evaluation script (CLI)
 │
@@ -179,10 +189,17 @@ python -m pokemon_rl.imitation.train_bc \
 python -m pokemon_rl.vgc.train \
     --format gen9championsvgc2026regmb \
     --champions-team \
-    --opponent random \
+    --opponent heuristic \
     --bc-model models/bc_pretrained \
+    --vary-opponent-team \
     --timesteps 500000
 ```
+
+- `--opponent` accepts `random`, `heuristic` (poke-env's `SimpleHeuristicsPlayer`), or
+  `support_heuristic` (our own `SupportAwareHeuristicsPlayer` — same heuristics, but actually uses
+  Trick Room / Tailwind / screens / weather-setting moves; see [Notable fixes](#notable-fixes--additions)).
+- `--vary-opponent-team` makes the opponent pick a random team per battle from
+  `OPPONENT_TEAM_POOL_CHAMPIONS_REGMB` (`vgc/team.py`) instead of always mirroring our own team.
 
 ### Step 3 — Evaluate
 
@@ -203,6 +220,41 @@ python -m pokemon_rl.vgc.evaluate \
 | Annihilape | Focus Sash | Rage Fist + Trick Room counter |
 | Gholdengo | White Herb | Special sweeper |
 | Hatterene | Colbur Berry | Trick Room setter |
+
+### Opponent team pool
+
+Training and evaluation vary the *opponent's* team per battle across 6 archetypes (`vgc/team.py`), so the
+agent doesn't just learn to beat a mirror match: Champions (mirror), Trick Room, Tailwind, Rain, Sand, and
+Sun. The Sun and Sand teams were revised to stop relying on Mega Evolution (Charizard → Mega Y for Drought,
+Tyranitar's now-unused mega stone) once we confirmed `SimpleHeuristicsPlayer` never mega-evolves — see below.
+
+## Notable fixes & additions
+
+A few non-obvious issues turned up while getting PPO to reliably pilot a doubles team, worth knowing before
+touching action decoding, the opponent setup, or the reward/observation pipeline:
+
+- **Force-switch bypass** (`VGCEnv.action_to_order`) — standard PPO ignores the action mask, so on
+  forced-switch turns (a Pokémon faints mid-turn) the agent regularly emitted invalid orders that fell back
+  to a random move instead of a random *valid switch*. Fixed by detecting the forced-switch case and picking
+  directly from `battle.valid_orders`, bypassing the model's action for that turn only.
+- **Target-encoding fix** (`VGCEnv._normalize_targets`) — for moves that don't target a specific Pokémon
+  (Trick Room, Protect, Tailwind, screens, Substitute, etc.), PPO's sampled target axis was almost always
+  wrong, silently invalidating the whole order even when the move choice itself was correct. Fixed by
+  normalizing the target from the move's `deduced_target` classification.
+- **Opponent team pool** (`vgc/teambuilder.py`'s `RandomTeamPool`) — poke-env's `SingleAgentWrapper` shares
+  one team object between both internal battling agents by construction, so training was silently always a
+  mirror match until this was patched to let the opponent side pick a random team per battle.
+- **`SimpleHeuristicsPlayer` never uses status/field moves** — its move-scoring formula is a product that
+  starts with `base_power`, so any Status-category move (Trick Room, Tailwind, screens, weather-setters, all
+  `base_power == 0`) scores exactly `0` and structurally never wins against a damaging move. This meant none
+  of the opponent pool's named archetypes ever actually executed their game plan. `vgc/opponents.py`'s
+  `SupportAwareHeuristicsPlayer` patches this with speed-aware conditions (Trick Room if our team is slower
+  on average, Tailwind if we don't have a speed edge, screens/weather early-game) — opt in via
+  `--opponent support_heuristic`.
+- **Damage estimator for diagnostics** (`vgc/damage_calc.py`) — wraps poke-env's own bundled Gen9 damage
+  calculator (a Python port of Smogon's calc) to answer "what's the expected damage/KO chance here" during
+  turn-by-turn battle traces, instead of guessing whether a win-rate regression is a coverage gap or an
+  execution issue.
 
 ## License
 
