@@ -173,19 +173,20 @@ domain→infrastructure→application→presentation flow when adding a feature,
 Some dashboard UI copy (button/label text, e.g. "Iniciar evaluación", "Modelo") is in Spanish — match the
 existing language when editing a given screen rather than mixing languages within one component.
 
-## Project status (updated 2026-08-12)
+## Project status (updated 2026-08-13)
 
-The agent has gone through 6 rounds of 500K-step PPO fine-tuning (warm-started each round from the previous
-round's `final.zip`), against `SimpleHeuristicsPlayer`, with an opponent team pool that grew each round.
-Win rate does **not** improve monotonically round-over-round — it's noisy, and drops when opponent variety
-grows faster than training time compensates:
+The agent has gone through 7 rounds of 500K-step PPO fine-tuning (warm-started each round from the previous
+round's `final.zip`), with an opponent team pool that grew each round. Win rate does **not** improve
+monotonically round-over-round — it's noisy, and drops when opponent variety grows faster than training time
+compensates:
 
-| Round | Opponent pool size | vs Champions (mirror) | vs Trick Room | vs Tailwind | vs Rain | vs Sand | vs Sun |
-|---|---|---|---|---|---|---|---|
-| 3 | 3 | 66.0% | 78.0% | 68.0% | — | — | — |
-| 4 (post action-target fix) | 3 | 68.0% | 70.0% | 32.0% | — | — | — |
-| 5 | 6 | 52.0% | **94.0%** | 48.0% | 36.0% | 20.0% | 34.0% |
-| 6 (revised Sun/Sand teams) | 6 | **66.0%** | 72.0% | 40.0% | 36.0% | 20.0% | 42.0% |
+| Round | Opponent pool size | Eval opponent | vs Champions (mirror) | vs Trick Room | vs Tailwind | vs Rain | vs Sand | vs Sun |
+|---|---|---|---|---|---|---|---|---|
+| 3 | 3 | `heuristic` | 66.0% | 78.0% | 68.0% | — | — | — |
+| 4 (post action-target fix) | 3 | `heuristic` | 68.0% | 70.0% | 32.0% | — | — | — |
+| 5 | 6 | `heuristic` | 52.0% | **94.0%** | 48.0% | 36.0% | 20.0% | 34.0% |
+| 6 (revised Sun/Sand teams) | 6 | `heuristic` | **66.0%** | 72.0% | 40.0% | 36.0% | 20.0% | 42.0% |
+| 7 (vs `support_heuristic`) | 6 | `support_heuristic` | 60.0% | **74.0%** | 46.0% | 32.0% | 18.0% | 32.0% |
 
 (50 battles/matchup, deterministic policy.) Diagnosed the round-4 Tailwind dip with a turn-by-turn battle
 trace (log active Pokémon/HP/chosen order every turn via `VGCEnv.action_to_order(..., fake=True)`, no need
@@ -193,11 +194,21 @@ for PS replays) rather than guessing — found the opponent bot never actually s
 wasn't a speed-control issue), but our Garchomp's Earthquake is walled by 3 of that team's 6 Flying-types, a
 real fixed-team coverage gap. Use this trace approach before spending another ~3.5h round chasing a
 regression blind. **Round 6's Trick Room matchup dropped 94.0%→72.0% (−22pp) on an unchanged opponent
-team**, the biggest single-round swing in the table — traced with `vgc/damage_calc.py` (see below) across 15
-battles: the opponent bot never set up Trick Room either (0/130 turns, same root cause as Tailwind — see
-next paragraph), there's no coverage wall (every opposing Pokémon had a high-damage or guaranteed-KO answer
-on paper), but ~22/130 turns had a guaranteed KO available that didn't convert that turn — read as round 6
-trading some matchup-specific sharpness for gains elsewhere (mirror +14pp, Sun +8pp), not a discrete bug.
+team**, the biggest single-round swing in the table up to that point — traced with `vgc/damage_calc.py` (see
+below) across 15 battles: the opponent bot never set up Trick Room either (0/130 turns, same root cause as
+Tailwind — see next paragraph), there's no coverage wall (every opposing Pokémon had a high-damage or
+guaranteed-KO answer on paper), but ~22/130 turns had a guaranteed KO available that didn't convert that
+turn — read as round 6 trading some matchup-specific sharpness for gains elsewhere (mirror +14pp, Sun +8pp),
+not a discrete bug.
+
+**Round 7 note — two variables changed at once, not a clean comparison to round 6**: both the model
+(retrained) and the eval opponent's behavior changed simultaneously (see "Known opponent-bot fact #2"
+below — `support_heuristic` now actually executes field-effect moves). Still informative: Trick Room and
+Tailwind — the two matchups now facing the *real* mechanic — held up or improved (+2pp, +6pp), suggesting
+the model doesn't fall apart against genuine Trick Room/Tailwind play. Sun dropped the most (42%→32%)
+despite carrying **zero** support moves (`SAMPLE_TEAM_SUN`'s weather is 100% ability-driven, no
+`sunnyday`-type move on the team) — that drop can't be attributed to the opponent patch at all, it's the
+same non-monotonic round-to-round noise as every other round in this table.
 
 **Known opponent-bot fact**: `SimpleHeuristicsPlayer` never Mega Evolves (confirmed by reading
 `poke_env/player/baselines.py` — `Player.create_order` there is called with `dynamax=`/`terastallize=` but
@@ -219,11 +230,19 @@ separate special-cased branch (lines 306-320) lets the bot use self-stat-boost s
 `target == "self"`, e.g. Swords Dance) — but field-effect status moves like Trick Room and Tailwind don't set
 `move.boosts`, so they never qualify for that carve-out either. **This generalizes to every base_power-0
 support move on every opponent-pool team** (screens, Thunder Wave, Helping Hand, Rage Powder, Will-O-Wisp,
-Encore, etc.) — none of it ever fires against this bot. Practically: the "vs Trick Room / vs Tailwind"
-matchup labels in the table above are really "vs that team's raw stat/type profile, played straight" — the
-pool's actual field-effect game plans have never been tested. Would need patching
-`SimpleHeuristicsPlayer` (or a different opponent policy) to test/train against real support-move usage —
-not a team-composition or env fix.
+Encore, etc.) — none of it ever fires against unpatched `SimpleHeuristicsPlayer`. Practically: the "vs Trick
+Room / vs Tailwind" matchup labels for rounds 3-6 above are really "vs that team's raw stat/type profile,
+played straight" — the pool's actual field-effect game plans were never tested until round 7.
+
+**Fixed as of round 7**: `vgc/opponents.py`'s `SupportAwareHeuristicsPlayer` (subclasses
+`SimpleHeuristicsPlayer`) adds a pre-`max()` branch with speed-aware conditions — Trick Room if our team is
+slower on average, Tailwind if we don't have a speed edge, screens/weather in the first 3 turns if not
+already active. Opt in via `--opponent support_heuristic` (train.py/evaluate.py). Verified live: Trick Room
+fired 5/5 in a smoke test; Tailwind correctly *didn't* fire against our team (that archetype's avg base
+speed, 85.5, is already higher than ours, 70.8 — a real "doesn't need it" case, not a bug). The
+weather/screens branches are implemented and logically sound but **still unverified in live play** — no
+current opponent-pool team carries an explicit weather-setting move (they all use auto-trigger abilities
+like Drizzle/Sand Stream/Drought) or a screen move, so those two branches have never actually fired.
 
 **Known model gap**: even after fixing the action-target-encoding bug above, the model still essentially
 never uses Trick Room in real battles (0/25 in a post-fix diagnostic) — it was trained for hundreds of
