@@ -4,21 +4,29 @@ Reinforcement learning agent for Pokémon VGC doubles battles using PPO + behavi
 
 ## Results
 
-The agent has gone through 6 rounds of 500K-step PPO fine-tuning (each warm-started from the previous round's
-checkpoint) against `SimpleHeuristicsPlayer`, with a growing pool of opponent team archetypes. Win rate is
-**noisy round-over-round rather than monotonically improving** — see `CLAUDE.md` for the full round-by-round
-history and diagnostics.
+The agent has gone through 15 rounds of PPO fine-tuning (each warm-started from an earlier round's checkpoint)
+against increasingly realistic opponents, with an opponent team pool that grew over time. Win rate is **noisy
+round-over-round rather than monotonically improving** — see `CLAUDE.md` for the full round-by-round history
+and diagnostics, and `data/results.sqlite3` (below) for the queryable version of the same history.
 
-Round 6 results, 50 deterministic-policy battles per matchup in `[Gen 9 Champions] VGC 2026 Reg M-B`:
+Rounds 8-11 experimented with **self-play** (our own side also picks a random team per battle, not just the
+opponent's) to see whether the agent could learn to pilot *any* team in the pool, not just its original
+Champions roster — it didn't work well in one or two rounds (the 6×6 own-team × opponent-team combinations
+diluted practice too much for any one pairing), so rounds 12+ pivoted to **dedicated single-team immersion**
+rounds instead: warm-start from the self-play checkpoint, then give one team a full round of undiluted
+practice. That approach worked — Rain and Champions both reached ~40-48% average win rate this way; Trick
+Room did not (~9%, a much bigger behavioral departure — inverted turn order vs. normal-speed play — that a
+single immersion round couldn't fix). Round 15 (Champions, closing that line) result, 50 deterministic-policy
+battles per matchup in `[Gen 9 Champions] VGC 2026 Reg M-B`, opponent `support_heuristic`:
 
 | Matchup | Win rate |
 |---------|----------|
-| Champions (mirror) | 66.0% |
-| Trick Room | 72.0% |
-| Tailwind | 40.0% |
-| Rain | 36.0% |
-| Sand | 20.0% |
-| Sun | 42.0% |
+| Champions (mirror) | 48.0% |
+| Trick Room | 80.0% |
+| Tailwind | 46.0% |
+| Rain | 40.0% |
+| Sand | 28.0% |
+| Sun | 48.0% |
 
 ## Architecture
 
@@ -68,13 +76,15 @@ pokemon_rl/
 │   ├── teambuilder.py    # RandomTeamPool — opponent picks a random team per battle
 │   ├── opponents.py      # SupportAwareHeuristicsPlayer — opponent that actually uses status/field moves
 │   ├── damage_calc.py    # Damage estimator (wraps poke-env's Gen9 calc) for matchup diagnostics
+│   ├── advisor.py        # rank_actions()/estimate_state_value() — ranked-action inference, no retrain needed
+│   ├── results_db.py     # SQLite schema + tracking helpers for training_runs/evaluations/battle_results
 │   ├── train.py          # VGC PPO training with optional BC warm-start
 │   └── evaluate.py       # Win-rate evaluation script (CLI)
 │
 ├── api/                  # FastAPI backend (DDD)
 │   ├── domain/           # Entities: Checkpoint, Evaluation, BattleResult
 │   ├── application/      # Use cases: queries + RunEvaluation command
-│   ├── infrastructure/   # Repositories: disk checkpoints, results JSON
+│   ├── infrastructure/   # Repositories: disk checkpoints, results SQLite (data/results.sqlite3)
 │   ├── presentation/     # Routers: /api/training, /api/evaluation
 │   └── main.py           # FastAPI entry point
 │
@@ -123,7 +133,8 @@ The dashboard lets you visualize training history, compare win rates across oppo
 
 ### 1 — Start the FastAPI backend
 
-The backend serves training checkpoints and evaluation results, and can run new evaluations on demand.
+The backend serves training checkpoints and evaluation results from `data/results.sqlite3` (see
+[Results tracking](#results-tracking) below), and can run new evaluations on demand.
 
 ```bash
 # From the project root, with the virtual environment active
@@ -138,7 +149,7 @@ The API will be available at `http://localhost:8080`. Interactive docs at `http:
 | `GET /api/training/checkpoints` | List all saved model checkpoints |
 | `GET /api/evaluation/results` | List all evaluation runs |
 | `GET /api/evaluation/results/{id}` | Get a specific evaluation with per-battle detail |
-| `POST /api/evaluation/run` | Run a new evaluation against random or heuristic |
+| `POST /api/evaluation/run` | Run a new evaluation against random/heuristic/support_heuristic |
 
 ### 2 — Start the Vue 3 dashboard
 
@@ -200,6 +211,9 @@ python -m pokemon_rl.vgc.train \
   Trick Room / Tailwind / screens / weather-setting moves; see [Notable fixes](#notable-fixes--additions)).
 - `--vary-opponent-team` makes the opponent pick a random team per battle from
   `OPPONENT_TEAM_POOL_CHAMPIONS_REGMB` (`vgc/team.py`) instead of always mirroring our own team.
+- `--vary-own-team` does the same for **our own** side (self-play) — pass both flags together to have
+  both sides sample independently from the pool each battle. `train()` also accepts `opponent_team_pool`/
+  `own_team_pool` directly (a list of team strings) to use a custom-sized pool instead of the full 6.
 
 ### Step 3 — Evaluate
 
@@ -209,6 +223,31 @@ python -m pokemon_rl.vgc.evaluate \
     --opponent random \
     --n-battles 50
 ```
+
+### Results tracking
+
+Every `train()` call registers itself in `data/results.sqlite3` automatically — no extra step needed. It
+inserts a `training_runs` row when a round starts (auto-incrementing round number, and resolving
+`warm_start_run_id` by comparing the starting checkpoint's MD5 against already-recorded checkpoints, so it
+works regardless of which path alias was used to load it) and updates it with actual timesteps, duration,
+and the final checkpoint's path/MD5 when the round finishes.
+
+`evaluate()` doesn't auto-persist (it's also used standalone and by the API's evaluation runner), but returns
+a `"battles"` key with full per-battle detail alongside the aggregate stats, ready to hand to
+`results_db.record_evaluation()`:
+
+```python
+from pokemon_rl.vgc.results_db import connect, record_evaluation
+
+conn = connect()
+result = evaluate(team=SAMPLE_TEAM_CHAMPIONS_REGMB, opponent_team_pool=[SAMPLE_TEAM_TRICKROOM], ...)
+record_evaluation(conn, training_run_id=16, our_team="champions",
+                   opponent_archetype="trickroom", opponent_behavior="support_heuristic", result=result)
+```
+
+The schema (`training_runs` → `evaluations` → `battle_results`, plus a self-referencing `warm_start_run_id`
+on `training_runs` for tracing a checkpoint's full lineage) is defined in `pokemon_rl/vgc/results_db.py`. The
+dashboard's `/api/evaluation/*` endpoints read from this same database via `SqliteResultsRepository`.
 
 ## Team — Champions VGC 2026 Reg M-B
 
@@ -255,6 +294,18 @@ touching action decoding, the opponent setup, or the reward/observation pipeline
   calculator (a Python port of Smogon's calc) to answer "what's the expected damage/KO chance here" during
   turn-by-turn battle traces, instead of guessing whether a win-rate regression is a coverage gap or an
   execution issue.
+- **PPO never learned to respect its own action mask** — the model's raw output distribution assigns
+  non-trivial probability to illegal actions (the same underlying issue behind the force-switch/target fixes
+  above). `vgc/advisor.py`'s `rank_actions()` reads SB3's per-head action-probability distribution directly
+  and filters it against `DoublesEnv.get_action_mask_individual` before ranking, instead of trusting the raw
+  top-k. Doesn't require retraining — works against any existing checkpoint. Its probabilities reflect what
+  the policy tends to pick (π(a|s)), not an estimate of outcome value — PPO only computes V(s) for the whole
+  state, not a value per action.
+- **Self-play generalizes far more slowly than expected** — training both sides' team selection at once (6×6
+  own-team × opponent-team combinations) diluted practice per pairing badly; a single dedicated round for one
+  team (own side fixed, opponent pool varies) reached competence in one shot where self-play plateaued for
+  several rounds. See the Results section above and `CLAUDE.md` for the full investigation, including why
+  Trick Room specifically never recovered even with a clean immersion round.
 
 ## License
 

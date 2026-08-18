@@ -43,7 +43,9 @@ def evaluate(
         nuestro — así se arma la tabla de matchups (mirror + arquetipos).
 
     Retorna un dict con: win_rate, wins, losses, draws, mean_reward,
-    mean_our_fainted, mean_opp_fainted.
+    mean_our_fainted, mean_opp_fainted, y battles (detalle por batalla,
+    para persistir en results_db.record_evaluation sin tener que reparsear
+    el log impreso arriba).
     """
     print(f"Modelo   : {model_path}")
     print(f"Formato  : {battle_format}")
@@ -65,6 +67,7 @@ def evaluate(
     our_fainted_log: list[int] = []
     opp_fainted_log: list[int] = []
     rewards_log: list[float] = []
+    battles_log: list[dict] = []
 
     print(f"{'Batalla':>7}  {'Resultado':6}  {'Reward':>7}  {'Caídos (nos/op)':>16}")
     print("-" * 47)
@@ -104,6 +107,10 @@ def evaluate(
             f"{ep:>7d}  {tag:6s}  {ep_reward:>+7.2f}  "
             f"     {our_fainted}/6  vs  {opp_fainted}/6"
         )
+        battles_log.append({
+            "battle_num": ep, "result": tag, "reward": float(ep_reward),
+            "our_fainted": our_fainted, "opp_fainted": opp_fainted,
+        })
 
     env.close()
 
@@ -131,6 +138,7 @@ def evaluate(
         "std_reward": float(np.std(rewards_log)),
         "mean_our_fainted": float(np.mean(our_fainted_log)),
         "mean_opp_fainted": float(np.mean(opp_fainted_log)),
+        "battles": battles_log,
     }
 
 

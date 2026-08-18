@@ -58,7 +58,10 @@ class VGCEnv(DoublesEnv):
     """
 
     def __init__(
-        self, opponent_team_pool: Optional[List[str]] = None, **kwargs: Any
+        self,
+        opponent_team_pool: Optional[List[str]] = None,
+        own_team_pool: Optional[List[str]] = None,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.observation_spaces = {
@@ -69,11 +72,18 @@ class VGCEnv(DoublesEnv):
         }
         # PokeEnv construye agent1 (nosotros) y agent2 (rival) con el mismo
         # `team` — por diseño, ambos lados de la batalla comparten un único
-        # Teambuilder. Para variar solo el equipo rival, reemplazamos el
-        # Teambuilder de agent2 después de la inicialización, dejando
-        # agent1 (nuestro equipo) sin tocar.
+        # Teambuilder. Reemplazamos el Teambuilder de cada lado por separado
+        # después de la inicialización según lo que se haya pedido:
+        #   - opponent_team_pool → sólo el rival varía (self sigue fijo en `team`)
+        #   - own_team_pool      → nuestro propio lado también sortea equipo
+        #     por batalla (self-play: aprender a pilotar cualquier equipo del
+        #     pool, no memorizar uno solo). Si se pasan ambos con el mismo
+        #     pool, cada lado sortea su equipo de forma independiente — no
+        #     necesariamente terminan igual.
         if opponent_team_pool:
             self.agent2._team = RandomTeamPool(opponent_team_pool)
+        if own_team_pool:
+            self.agent1._team = RandomTeamPool(own_team_pool)
 
     def embed_battle(self, battle: Any) -> np.ndarray:
         """Convierte el estado doubles en un vector float32 de 925 valores."""
@@ -201,6 +211,7 @@ def make_vgc_env(
     opponent: str = "random",
     strict: bool = False,
     opponent_team_pool: Optional[List[str]] = None,
+    own_team_pool: Optional[List[str]] = None,
 ) -> SingleAgentWrapper:
     """
     Construye el entorno VGC Gymnasium listo para entrenar.
@@ -215,6 +226,7 @@ def make_vgc_env(
     team : str, optional
         Equipo en formato Showdown. Requerido para formatos VGC.
         Usa ``pokemon_rl.vgc.team.SAMPLE_TEAM_REG_H`` como punto de partida.
+        Ignorado para nuestro lado si se pasa ``own_team_pool``.
     opponent : str
         ``"random"`` → RandomPlayer  |  ``"heuristic"`` → SimpleHeuristicsPlayer  |
         ``"support_heuristic"`` → SupportAwareHeuristicsPlayer (igual que heuristic,
@@ -224,7 +236,12 @@ def make_vgc_env(
     opponent_team_pool : list of str, optional
         Si se pasa, el oponente elige un equipo al azar del pool en cada
         batalla (ver ``RandomTeamPool``) en vez de usar siempre `team`.
-        Nuestro propio agente sigue usando `team` fijo — solo el rival varía.
+    own_team_pool : list of str, optional
+        Si se pasa, **nuestro propio agente** también elige un equipo al azar
+        del pool en cada batalla, en vez de usar siempre `team` fijo —
+        self-play: el modelo aprende a pilotar cualquier equipo del pool, no
+        solo uno memorizado. Independiente de `opponent_team_pool` — cada
+        lado sortea el suyo por separado, no quedan sincronizados.
 
     Returns
     -------
@@ -246,6 +263,7 @@ def make_vgc_env(
         strict=strict,
         choose_on_teampreview=False,
         opponent_team_pool=opponent_team_pool,
+        own_team_pool=own_team_pool,
     )
 
     # NOTA: el `team` que se le pasa acá al objeto `opponent` no tiene efecto

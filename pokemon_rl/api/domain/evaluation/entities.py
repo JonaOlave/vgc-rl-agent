@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -28,3 +28,9 @@ class Evaluation:
     mean_our_fainted: float
     mean_opp_fainted: float
     battles: List[BattleResult] = field(default_factory=list)
+    # Opcionales — sólo poblados por evaluaciones respaldadas en
+    # results_db.py (training_runs/evaluations); None para datos de
+    # semilla o evaluaciones sueltas sin ronda de entrenamiento asociada.
+    round_number: Optional[int] = None
+    our_team: Optional[str] = None
+    opponent_archetype: Optional[str] = None

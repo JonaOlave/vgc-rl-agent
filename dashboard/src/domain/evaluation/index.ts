@@ -20,5 +20,8 @@ export interface Evaluation {
   std_reward: number
   mean_our_fainted: number
   mean_opp_fainted: number
+  round_number: number | null
+  our_team: string | null
+  opponent_archetype: string | null
   battles: BattleResult[]
 }

@@ -22,6 +22,12 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import get_schedule_fn
 
 from .env import make_vgc_env
+from .results_db import connect as _connect_results_db
+from .results_db import (
+    register_training_complete,
+    register_training_start,
+    team_to_archetype,
+)
 from .team import (
     OPPONENT_TEAM_POOL_CHAMPIONS_REGMB,
     SAMPLE_TEAM_CHAMPIONS_REGMB,
@@ -38,12 +44,53 @@ def train(
     log_path: str = "logs/vgc/",
     bc_model_path: Optional[str] = None,
     vary_opponent_team: bool = False,
+    vary_own_team: bool = False,
+    opponent_team_pool: Optional[list[str]] = None,
+    own_team_pool: Optional[list[str]] = None,
 ):
+    """
+    opponent_team_pool / own_team_pool : list of str, optional
+        Pool explícito a usar en vez del pool completo de 6 equipos que
+        activan vary_opponent_team/vary_own_team — para acotar la
+        superficie combinatoria (ej. entrenar contra sólo 2 rivales en vez
+        de 6) sin tener que exponer un flag de CLI nuevo por cada
+        combinación. Si se pasa, tiene prioridad sobre el flag booleano
+        correspondiente.
+    """
+    resolved_opponent_pool = (
+        opponent_team_pool
+        if opponent_team_pool is not None
+        else (OPPONENT_TEAM_POOL_CHAMPIONS_REGMB if vary_opponent_team else None)
+    )
+    resolved_own_pool = (
+        own_team_pool
+        if own_team_pool is not None
+        else (OPPONENT_TEAM_POOL_CHAMPIONS_REGMB if vary_own_team else None)
+    )
+
     print(f"Formato: {battle_format}")
     print(f"Oponente: {opponent}")
-    if vary_opponent_team:
-        print(f"Pool de equipos rivales: {len(OPPONENT_TEAM_POOL_CHAMPIONS_REGMB)} equipos (variación activada)")
+    if resolved_opponent_pool:
+        print(f"Pool de equipos rivales: {len(resolved_opponent_pool)} equipos (variación activada)")
+    if resolved_own_pool:
+        print(f"Pool de equipos propios: {len(resolved_own_pool)} equipos (self-play activado)")
     print("Creando entorno VGC doubles...")
+
+    db_conn = _connect_results_db()
+    training_run_id = register_training_start(
+        db_conn,
+        total_timesteps=total_timesteps,
+        own_team=team_to_archetype(team),
+        own_team_pool=(
+            [team_to_archetype(t) or t for t in resolved_own_pool] if resolved_own_pool else None
+        ),
+        opponent_behavior=opponent,
+        opponent_team_pool=(
+            [team_to_archetype(t) or t for t in resolved_opponent_pool] if resolved_opponent_pool else None
+        ),
+        warm_start_checkpoint_path=bc_model_path,
+    )
+    db_conn.close()
 
     env = make_vgc_env(
         battle_format=battle_format,
@@ -52,7 +99,8 @@ def train(
         team=team,
         opponent=opponent,
         strict=False,
-        opponent_team_pool=OPPONENT_TEAM_POOL_CHAMPIONS_REGMB if vary_opponent_team else None,
+        opponent_team_pool=resolved_opponent_pool,
+        own_team_pool=resolved_own_pool,
     )
 
     os.makedirs(save_path, exist_ok=True)
@@ -112,6 +160,14 @@ def train(
     print(f"Modelo guardado → {save_path}/final.zip")
     env.close()
 
+    db_conn = _connect_results_db()
+    register_training_complete(
+        db_conn, training_run_id,
+        actual_timesteps=model.num_timesteps,
+        final_checkpoint_path=f"{save_path}/final",
+    )
+    db_conn.close()
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -131,6 +187,11 @@ def parse_args():
                    help="El oponente elige un equipo al azar por batalla "
                         "(pool en team.OPPONENT_TEAM_POOL_CHAMPIONS_REGMB) en vez "
                         "de ser siempre un mirror match del equipo propio")
+    p.add_argument("--vary-own-team", action="store_true",
+                   help="Nuestro propio agente también elige un equipo al azar por "
+                        "batalla (mismo pool que --vary-opponent-team) en vez de usar "
+                        "siempre --champions-team fijo — self-play, para que el modelo "
+                        "aprenda a pilotar cualquier equipo del pool, no solo uno")
     return p.parse_args()
 
 
@@ -149,4 +210,5 @@ if __name__ == "__main__":
         total_timesteps=args.timesteps,
         bc_model_path=args.bc_model,
         vary_opponent_team=args.vary_opponent_team,
+        vary_own_team=args.vary_own_team,
     )

@@ -3,11 +3,11 @@ from pydantic import BaseModel
 
 from pokemon_rl.api.application.evaluation.commands import RunEvaluationCommand, run_evaluation
 from pokemon_rl.api.application.evaluation.queries import get_evaluations, get_evaluation
-from pokemon_rl.api.infrastructure.evaluation.results_repository import ResultsRepository
+from pokemon_rl.api.infrastructure.evaluation.sqlite_results_repository import SqliteResultsRepository
 from pokemon_rl.api.infrastructure.evaluation.runner import EvaluationRunner
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
-_results_repo = ResultsRepository()
+_results_repo = SqliteResultsRepository()
 _runner = EvaluationRunner()
 
 
@@ -33,6 +33,9 @@ def _eval_to_dict(e) -> dict:
         "std_reward": e.std_reward,
         "mean_our_fainted": e.mean_our_fainted,
         "mean_opp_fainted": e.mean_opp_fainted,
+        "round_number": e.round_number,
+        "our_team": e.our_team,
+        "opponent_archetype": e.opponent_archetype,
         "battles": [
             {
                 "battle_num": b.battle_num,
